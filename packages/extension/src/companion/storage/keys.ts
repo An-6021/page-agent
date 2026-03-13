@@ -1,5 +1,6 @@
 export const COMPANION_STORAGE_KEYS = [
 	'companionEnabled',
+	'companionServerUrl',
 	'companionPairToken',
 	'companionConnectionState',
 	'companionCurrentTaskId',

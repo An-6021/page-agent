@@ -28,6 +28,10 @@ function normalizeCompanionStorageState(
 			typeof value.companionEnabled === 'boolean'
 				? value.companionEnabled
 				: DEFAULT_COMPANION_STORAGE_STATE.companionEnabled,
+		companionServerUrl:
+			typeof value.companionServerUrl === 'string' && value.companionServerUrl.trim().length > 0
+				? value.companionServerUrl
+				: DEFAULT_COMPANION_STORAGE_STATE.companionServerUrl,
 		companionPairToken:
 			typeof value.companionPairToken === 'string' || value.companionPairToken === null
 				? value.companionPairToken
@@ -53,6 +57,12 @@ function normalizeCompanionStorageState(
 				? value.companionLastSeenAt
 				: DEFAULT_COMPANION_STORAGE_STATE.companionLastSeenAt,
 	}
+}
+
+function omitUndefinedFields<T extends Record<string, unknown>>(value: T): Partial<T> {
+	return Object.fromEntries(
+		Object.entries(value).filter(([, entryValue]) => entryValue !== undefined)
+	) as Partial<T>
 }
 
 export async function getCompanionStorageState(): Promise<CompanionStorageState> {
@@ -89,7 +99,13 @@ export async function ensureCompanionStorageDefaults(): Promise<CompanionStorage
 export async function updateCompanionStorageState(
 	patch: Partial<CompanionStorageState>
 ): Promise<CompanionStorageState> {
-	await chrome.storage.local.set(patch)
+	const normalizedPatch = omitUndefinedFields(patch)
+
+	if (Object.keys(normalizedPatch).length === 0) {
+		return getCompanionStorageState()
+	}
+
+	await chrome.storage.local.set(normalizedPatch)
 	return getCompanionStorageState()
 }
 
@@ -100,21 +116,21 @@ export async function setCompanionConnectionState(
 		lastSeenAt?: number | null
 	} = {}
 ): Promise<CompanionStorageState> {
-	return updateCompanionStorageState({
+	const patch: Partial<CompanionStorageState> = {
 		companionConnectionState: state,
-		companionLastError:
-			options.lastError !== undefined
-				? options.lastError
-				: state === 'error'
-					? DEFAULT_COMPANION_STORAGE_STATE.companionLastError
-					: undefined,
-		companionLastSeenAt:
-			options.lastSeenAt !== undefined
-				? options.lastSeenAt
-				: state === 'connected'
-					? Date.now()
-					: undefined,
-	})
+	}
+
+	if (options.lastError !== undefined) {
+		patch.companionLastError = options.lastError
+	}
+
+	if (options.lastSeenAt !== undefined) {
+		patch.companionLastSeenAt = options.lastSeenAt
+	} else if (state === 'connected') {
+		patch.companionLastSeenAt = Date.now()
+	}
+
+	return updateCompanionStorageState(patch)
 }
 
 export async function setCompanionTaskState(

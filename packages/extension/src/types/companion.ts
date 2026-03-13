@@ -19,8 +19,11 @@ export const companionTaskStatuses = [
 
 export type CompanionTaskStatus = (typeof companionTaskStatuses)[number]
 
+export const DEFAULT_COMPANION_SERVER_URL = 'ws://127.0.0.1:17888'
+
 export interface CompanionStorageState {
 	companionEnabled: boolean
+	companionServerUrl: string
 	companionPairToken: string | null
 	companionConnectionState: CompanionConnectionState
 	companionCurrentTaskId: string | null
@@ -31,6 +34,7 @@ export interface CompanionStorageState {
 
 export const DEFAULT_COMPANION_STORAGE_STATE: CompanionStorageState = {
 	companionEnabled: false,
+	companionServerUrl: DEFAULT_COMPANION_SERVER_URL,
 	companionPairToken: null,
 	companionConnectionState: 'disabled',
 	companionCurrentTaskId: null,
