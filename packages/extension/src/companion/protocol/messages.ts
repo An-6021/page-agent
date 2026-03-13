@@ -29,6 +29,9 @@ export const companionErrorCodes = [
 	'pairing_required',
 	'pairing_mismatch',
 	'not_implemented',
+	'task_conflict',
+	'task_not_found',
+	'execution_error',
 ] as const
 
 export type CompanionErrorCode = (typeof companionErrorCodes)[number]

@@ -1,5 +1,8 @@
 import {
 	COMPANION_PROTOCOL_VERSION,
+	type CompanionRunRequestPayload,
+	type CompanionStatusRequestPayload,
+	type CompanionStopRequestPayload,
 	createAckEnvelope,
 	createErrorEnvelope,
 	createStatusEnvelope,
@@ -9,7 +12,10 @@ import {
 import {
 	closeCompanionOffscreenDocument,
 	ensureCompanionOffscreenDocument,
+	getCompanionOffscreenStatus,
 	pingCompanionOffscreen,
+	runCompanionOffscreen,
+	stopCompanionOffscreen,
 } from '@/companion/runtime/offscreen-bridge'
 import {
 	ensureCompanionStorageDefaults,
@@ -212,10 +218,10 @@ class CompanionBackgroundRuntime {
 				await this.#handleStatus(envelope.requestId, envelope.payload.taskId)
 				return
 			case 'run':
-				await this.#handleUnimplementedAction(envelope.requestId, envelope.type)
+				await this.#handleRun(envelope.requestId, envelope.payload)
 				return
 			case 'stop':
-				await this.#handleUnimplementedAction(envelope.requestId, envelope.type)
+				await this.#handleStop(envelope.requestId, envelope.payload)
 				return
 		}
 	}
@@ -313,7 +319,7 @@ class CompanionBackgroundRuntime {
 				accepted: true,
 				requestType: 'hello',
 				protocolVersion: COMPANION_PROTOCOL_VERSION,
-				capabilities: ['hello', 'pair', 'status'],
+				capabilities: ['hello', 'pair', 'run', 'status', 'stop'],
 			})
 		)
 	}
@@ -349,22 +355,35 @@ class CompanionBackgroundRuntime {
 	}
 
 	async #handleStatus(requestId: string | null, taskId?: string | null): Promise<void> {
-		const state = await getCompanionStorageState()
+		try {
+			await ensureCompanionOffscreenDocument()
+			const response = await getCompanionOffscreenStatus({ taskId })
 
-		this.#sendEnvelope(
-			createStatusEnvelope(requestId, {
-				task: createTaskSnapshot(state, taskId),
-				connectionState: state.companionConnectionState,
-				paired: Boolean(state.companionPairToken),
-				protocolVersion: COMPANION_PROTOCOL_VERSION,
-			})
-		)
+			if (!response.ok || !response.task) {
+				this.#sendOffscreenError(
+					requestId,
+					'status',
+					response.code ?? 'execution_error',
+					response.error ?? 'Failed to fetch task status from offscreen executor.'
+				)
+				return
+			}
+
+			await this.#sendTaskStatusEnvelope(requestId, response.task)
+		} catch (error) {
+			const state = await getCompanionStorageState()
+			this.#sendEnvelope(
+				createStatusEnvelope(requestId, {
+					task: createTaskSnapshot(state, taskId),
+					connectionState: state.companionConnectionState,
+					paired: Boolean(state.companionPairToken),
+					protocolVersion: COMPANION_PROTOCOL_VERSION,
+				})
+			)
+		}
 	}
 
-	async #handleUnimplementedAction(
-		requestId: string | null,
-		requestType: 'run' | 'stop'
-	): Promise<void> {
+	async #handleRun(requestId: string | null, payload: CompanionRunRequestPayload): Promise<void> {
 		const state = await getCompanionStorageState()
 
 		if (!state.companionPairToken) {
@@ -372,16 +391,110 @@ class CompanionBackgroundRuntime {
 				createErrorEnvelope(requestId, {
 					code: 'pairing_required',
 					message: 'Companion must be paired before task control commands are allowed.',
-					requestType,
+					requestType: 'run',
 				})
 			)
 			return
 		}
 
+		try {
+			await ensureCompanionOffscreenDocument()
+			const response = await runCompanionOffscreen(payload)
+
+			if (!response.ok || !response.task) {
+				this.#sendOffscreenError(
+					requestId,
+					'run',
+					response.code ?? 'execution_error',
+					response.error ?? 'Failed to start the task in the offscreen executor.'
+				)
+				return
+			}
+
+			await this.#sendTaskStatusEnvelope(requestId, response.task)
+		} catch (error) {
+			this.#sendEnvelope(
+				createErrorEnvelope(requestId, {
+					code: 'execution_error',
+					message:
+						error instanceof Error
+							? error.message
+							: 'Failed to start the task in the offscreen executor.',
+					requestType: 'run',
+				})
+			)
+		}
+	}
+
+	async #handleStop(requestId: string | null, payload: CompanionStopRequestPayload): Promise<void> {
+		const state = await getCompanionStorageState()
+
+		if (!state.companionPairToken) {
+			this.#sendEnvelope(
+				createErrorEnvelope(requestId, {
+					code: 'pairing_required',
+					message: 'Companion must be paired before task control commands are allowed.',
+					requestType: 'stop',
+				})
+			)
+			return
+		}
+
+		try {
+			await ensureCompanionOffscreenDocument()
+			const response = await stopCompanionOffscreen(payload)
+
+			if (!response.ok || !response.task) {
+				this.#sendOffscreenError(
+					requestId,
+					'stop',
+					response.code ?? 'execution_error',
+					response.error ?? 'Failed to stop the task in the offscreen executor.'
+				)
+				return
+			}
+
+			await this.#sendTaskStatusEnvelope(requestId, response.task)
+		} catch (error) {
+			this.#sendEnvelope(
+				createErrorEnvelope(requestId, {
+					code: 'execution_error',
+					message:
+						error instanceof Error
+							? error.message
+							: 'Failed to stop the task in the offscreen executor.',
+					requestType: 'stop',
+				})
+			)
+		}
+	}
+
+	async #sendTaskStatusEnvelope(
+		requestId: string | null,
+		task: ReturnType<typeof createTaskSnapshot>
+	): Promise<void> {
+		const state = await getCompanionStorageState()
+
+		this.#sendEnvelope(
+			createStatusEnvelope(requestId, {
+				task,
+				connectionState: state.companionConnectionState,
+				paired: Boolean(state.companionPairToken),
+				protocolVersion: COMPANION_PROTOCOL_VERSION,
+			})
+		)
+	}
+
+	#sendOffscreenError(
+		requestId: string | null,
+		requestType: 'run' | 'status' | 'stop',
+		code: 'invalid_payload' | 'task_conflict' | 'task_not_found' | 'execution_error',
+		message: string
+	): void {
 		this.#sendEnvelope(
 			createErrorEnvelope(requestId, {
-				code: 'not_implemented',
-				message: `${requestType} is not implemented yet.`,
+				code,
+				message,
 				requestType,
 			})
 		)

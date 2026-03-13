@@ -1,11 +1,11 @@
 import {
-	COMPANION_OFFSCREEN_MESSAGE_TYPE,
-	COMPANION_OFFSCREEN_TARGET,
-	type CompanionOffscreenRequest,
 	type CompanionOffscreenResponse,
+	isCompanionOffscreenRequest,
 } from '@/companion/protocol/offscreen'
+import { initializeCompanionOffscreenRuntime } from '@/companion/runtime/offscreen-runtime'
 
 const PREFIX = '[Companion.offscreen]'
+const runtime = initializeCompanionOffscreenRuntime()
 
 console.info(`${PREFIX} Offscreen document loaded.`)
 
@@ -17,35 +17,21 @@ chrome.runtime.onMessage.addListener(
 	): true | undefined => {
 		if (!isCompanionOffscreenRequest(message)) return
 
-		if (message.action === 'ping') {
-			sendResponse({
-				ok: true,
-				target: COMPANION_OFFSCREEN_TARGET,
-				action: 'ping',
-				ready: true,
-				timestamp: Date.now(),
+		void runtime
+			.handleMessage(message)
+			.then(sendResponse)
+			.catch((error) => {
+				sendResponse({
+					ok: false,
+					target: 'companion-offscreen',
+					action: message.action,
+					ready: true,
+					timestamp: Date.now(),
+					code: 'execution_error',
+					error: error instanceof Error ? error.message : String(error),
+				})
 			})
-			return true
-		}
 
-		sendResponse({
-			ok: false,
-			target: COMPANION_OFFSCREEN_TARGET,
-			action: 'ping',
-			ready: false,
-			timestamp: Date.now(),
-			error: `Unsupported offscreen action: ${String((message as { action?: unknown }).action)}`,
-		})
 		return true
 	}
 )
-
-function isCompanionOffscreenRequest(value: unknown): value is CompanionOffscreenRequest {
-	if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
-
-	return (
-		(value as { type?: unknown }).type === COMPANION_OFFSCREEN_MESSAGE_TYPE &&
-		(value as { target?: unknown }).target === COMPANION_OFFSCREEN_TARGET &&
-		(value as { action?: unknown }).action === 'ping'
-	)
-}

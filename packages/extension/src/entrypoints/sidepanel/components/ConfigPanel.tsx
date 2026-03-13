@@ -12,8 +12,8 @@ import {
 import { useEffect, useState } from 'react'
 import { siGithub } from 'simple-icons'
 
+import type { ExtConfig, LanguagePreference } from '@/agent/config'
 import { DEMO_API_KEY, DEMO_BASE_URL, DEMO_MODEL, isTestingEndpoint } from '@/agent/constants'
-import type { ExtConfig, LanguagePreference } from '@/agent/useAgent'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'

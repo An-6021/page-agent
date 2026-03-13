@@ -1,30 +1,18 @@
 /**
  * React hook for using AgentController
  */
-import type {
-	AgentActivity,
-	AgentStatus,
-	HistoricalEvent,
-	SupportedLanguage,
-} from '@page-agent/core'
-import type { LLMConfig } from '@page-agent/llms'
+import type { AgentActivity, AgentStatus, HistoricalEvent } from '@page-agent/core'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { MultiPageAgent } from './MultiPageAgent'
-import { DEMO_CONFIG, migrateLegacyEndpoint } from './constants'
+import {
+	type AdvancedConfig,
+	type ExtConfig,
+	type LanguagePreference,
+	loadStoredAgentConfig,
+} from './config'
 
-/** Language preference: undefined means follow system */
-export type LanguagePreference = SupportedLanguage | undefined
-
-export interface AdvancedConfig {
-	maxSteps?: number
-	systemInstruction?: string
-	experimentalLlmsTxt?: boolean
-}
-
-export interface ExtConfig extends LLMConfig, AdvancedConfig {
-	language?: LanguagePreference
-}
+export type { AdvancedConfig, ExtConfig, LanguagePreference } from './config'
 
 export interface UseAgentResult {
 	status: AgentStatus
@@ -46,22 +34,7 @@ export function useAgent(): UseAgentResult {
 	const [config, setConfig] = useState<ExtConfig | null>(null)
 
 	useEffect(() => {
-		chrome.storage.local.get(['llmConfig', 'language', 'advancedConfig']).then((result) => {
-			let llmConfig = (result.llmConfig as LLMConfig) ?? DEMO_CONFIG
-			const language = (result.language as SupportedLanguage) || undefined
-			const advancedConfig = (result.advancedConfig as AdvancedConfig) ?? {}
-
-			// Auto-migrate legacy testing endpoints
-			const migrated = migrateLegacyEndpoint(llmConfig)
-			if (migrated !== llmConfig) {
-				llmConfig = migrated
-				chrome.storage.local.set({ llmConfig: migrated })
-			} else if (!result.llmConfig) {
-				chrome.storage.local.set({ llmConfig: DEMO_CONFIG })
-			}
-
-			setConfig({ ...llmConfig, ...advancedConfig, language })
-		})
+		loadStoredAgentConfig().then(setConfig)
 	}, [])
 
 	useEffect(() => {
