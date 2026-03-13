@@ -7,6 +7,11 @@ import {
 	parseCompanionRequest,
 } from '@/companion/protocol/messages'
 import {
+	closeCompanionOffscreenDocument,
+	ensureCompanionOffscreenDocument,
+	pingCompanionOffscreen,
+} from '@/companion/runtime/offscreen-bridge'
+import {
 	ensureCompanionStorageDefaults,
 	getCompanionStorageState,
 	setCompanionConnectionState,
@@ -56,12 +61,29 @@ class CompanionBackgroundRuntime {
 		if (!state.companionEnabled) {
 			this.#clearReconnectTimer()
 			this.#disposeSocket()
+			await closeCompanionOffscreenDocument()
 
 			await setCompanionConnectionState('disabled', {
 				lastError: null,
 				lastSeenAt: null,
 			})
 			console.info(`${PREFIX} Companion mode is disabled.`)
+			return
+		}
+
+		try {
+			await ensureCompanionOffscreenDocument()
+			await pingCompanionOffscreen()
+		} catch (error) {
+			const message =
+				error instanceof Error
+					? error.message
+					: 'Failed to initialize companion offscreen document.'
+
+			await setCompanionConnectionState('error', {
+				lastError: message,
+			})
+			console.error(`${PREFIX} Offscreen initialization failed.`, error)
 			return
 		}
 
@@ -206,6 +228,7 @@ class CompanionBackgroundRuntime {
 				lastError: null,
 				lastSeenAt: null,
 			})
+			await closeCompanionOffscreenDocument()
 			return
 		}
 
