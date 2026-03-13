@@ -1,4 +1,5 @@
 import type {
+	CompanionEventEnvelope,
 	CompanionRunRequestPayload,
 	CompanionStatusRequestPayload,
 	CompanionStopRequestPayload,
@@ -8,6 +9,7 @@ import type { CompanionTaskSnapshot } from '@/types/companion'
 export const COMPANION_OFFSCREEN_MESSAGE_TYPE = 'COMPANION_OFFSCREEN'
 export const COMPANION_OFFSCREEN_TARGET = 'companion-offscreen'
 export const COMPANION_OFFSCREEN_DOCUMENT_PATH = 'offscreen.html'
+export const COMPANION_BACKGROUND_EVENT_MESSAGE_TYPE = 'COMPANION_BACKGROUND_EVENT'
 
 export const companionOffscreenActions = ['ping', 'run', 'status', 'stop'] as const
 
@@ -52,6 +54,11 @@ export interface CompanionOffscreenResponse<
 	code?: CompanionOffscreenErrorCode
 }
 
+export interface CompanionBackgroundEventMessage {
+	type: typeof COMPANION_BACKGROUND_EVENT_MESSAGE_TYPE
+	envelope: CompanionEventEnvelope
+}
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -83,6 +90,12 @@ function isTaskSnapshot(value: unknown): value is CompanionTaskSnapshot {
 			value.lastSeenAt === null ||
 			typeof value.lastSeenAt === 'number')
 	)
+}
+
+function isCompanionBackgroundEventType(
+	value: unknown
+): value is CompanionBackgroundEventMessage['envelope']['type'] {
+	return value === 'status_changed' || value === 'activity' || value === 'result'
 }
 
 export function createCompanionOffscreenPingRequest(): CompanionOffscreenRequest<'ping'> {
@@ -126,6 +139,15 @@ export function createCompanionOffscreenStopRequest(
 	}
 }
 
+export function createCompanionBackgroundEventMessage(
+	envelope: CompanionEventEnvelope
+): CompanionBackgroundEventMessage {
+	return {
+		type: COMPANION_BACKGROUND_EVENT_MESSAGE_TYPE,
+		envelope,
+	}
+}
+
 export function isCompanionOffscreenRequest(value: unknown): value is CompanionOffscreenRequest {
 	if (!isPlainObject(value)) return false
 
@@ -150,4 +172,14 @@ export function isCompanionOffscreenResponse(value: unknown): value is Companion
 		(value.error === undefined || typeof value.error === 'string') &&
 		(value.code === undefined || isOffscreenErrorCode(value.code))
 	)
+}
+
+export function isCompanionBackgroundEventMessage(
+	value: unknown
+): value is CompanionBackgroundEventMessage {
+	if (!isPlainObject(value)) return false
+	if (value.type !== COMPANION_BACKGROUND_EVENT_MESSAGE_TYPE) return false
+	if (!isPlainObject(value.envelope)) return false
+
+	return isCompanionBackgroundEventType(value.envelope.type)
 }

@@ -1,14 +1,19 @@
 import {
 	COMPANION_PROTOCOL_VERSION,
+	type CompanionEventEnvelope,
 	type CompanionRunRequestPayload,
 	type CompanionStatusRequestPayload,
 	type CompanionStopRequestPayload,
 	createAckEnvelope,
+	createActivityEnvelope,
 	createErrorEnvelope,
+	createResultEnvelope,
+	createStatusChangedEnvelope,
 	createStatusEnvelope,
 	createTaskSnapshot,
 	parseCompanionRequest,
 } from '@/companion/protocol/messages'
+import { isCompanionBackgroundEventMessage } from '@/companion/protocol/offscreen'
 import {
 	closeCompanionOffscreenDocument,
 	ensureCompanionOffscreenDocument,
@@ -521,6 +526,20 @@ class CompanionBackgroundRuntime {
 
 		this.#socket.send(JSON.stringify(envelope))
 	}
+
+	handleCompanionEvent(envelope: CompanionEventEnvelope): void {
+		switch (envelope.type) {
+			case 'status_changed':
+				this.#sendEnvelope(createStatusChangedEnvelope(envelope.requestId, envelope.payload))
+				return
+			case 'activity':
+				this.#sendEnvelope(createActivityEnvelope(envelope.requestId, envelope.payload))
+				return
+			case 'result':
+				this.#sendEnvelope(createResultEnvelope(envelope.requestId, envelope.payload))
+				return
+		}
+	}
 }
 
 let runtime: CompanionBackgroundRuntime | null = null
@@ -536,6 +555,18 @@ export async function initializeCompanionBackgroundRuntime(): Promise<void> {
 		})
 		console.error(`${PREFIX} Failed to initialize runtime.`, error)
 	}
+}
+
+export function handleCompanionBackgroundMessage(
+	message: unknown,
+	_sender: chrome.runtime.MessageSender,
+	sendResponse: (response: { ok: boolean }) => void
+): true | undefined {
+	if (!isCompanionBackgroundEventMessage(message)) return
+
+	runtime?.handleCompanionEvent(message.envelope)
+	sendResponse({ ok: true })
+	return true
 }
 
 function isCompanionTaskActive(status: CompanionTaskStatus): boolean {

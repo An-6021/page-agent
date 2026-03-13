@@ -1,6 +1,9 @@
 import { handlePageControlMessage } from '@/agent/RemotePageController.background'
 import { handleTabControlMessage, setupTabChangeEvents } from '@/agent/TabsController.background'
-import { initializeCompanionBackgroundRuntime } from '@/companion/runtime/background-runtime'
+import {
+	handleCompanionBackgroundMessage,
+	initializeCompanionBackgroundRuntime,
+} from '@/companion/runtime/background-runtime'
 
 export default defineBackground(() => {
 	console.log('[Background] Service Worker started')
@@ -25,6 +28,8 @@ export default defineBackground(() => {
 			return handleTabControlMessage(message, sender, sendResponse)
 		} else if (message.type === 'PAGE_CONTROL') {
 			return handlePageControlMessage(message, sender, sendResponse)
+		} else if (handleCompanionBackgroundMessage(message, sender, sendResponse)) {
+			return true
 		} else {
 			sendResponse({ error: 'Unknown message type' })
 			return

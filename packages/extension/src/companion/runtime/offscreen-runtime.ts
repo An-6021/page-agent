@@ -1,16 +1,24 @@
-import type { AgentStatus } from '@page-agent/core'
+import type { AgentActivity, AgentStatus } from '@page-agent/core'
 
 import { MultiPageAgent } from '@/agent/MultiPageAgent'
 import { type AdvancedConfig, type ExtConfig, loadStoredAgentConfig } from '@/agent/config'
 import type {
+	CompanionEventEnvelope,
+	CompanionResultPayload,
 	CompanionRunRequestPayload,
 	CompanionStatusRequestPayload,
 	CompanionStopRequestPayload,
+} from '@/companion/protocol/messages'
+import {
+	createActivityEnvelope,
+	createResultEnvelope,
+	createStatusChangedEnvelope,
 } from '@/companion/protocol/messages'
 import type {
 	CompanionOffscreenRequest,
 	CompanionOffscreenResponse,
 } from '@/companion/protocol/offscreen'
+import { createCompanionBackgroundEventMessage } from '@/companion/protocol/offscreen'
 import { updateCompanionStorageState } from '@/companion/storage/companion-store'
 import type { CompanionTaskSnapshot, CompanionTaskStatus } from '@/types/companion'
 
@@ -73,11 +81,14 @@ class CompanionOffscreenRuntime {
 		this.#stopRequested = false
 		this.#bindAgent(agent, taskId)
 
-		await this.#setSnapshot({
-			taskId,
-			status: 'queued',
-			lastError: null,
-		})
+		await this.#setSnapshot(
+			{
+				taskId,
+				status: 'queued',
+				lastError: null,
+			},
+			false
+		)
 
 		this.#activeTaskPromise = this.#executeTask(agent, taskId, payload.task)
 
@@ -171,6 +182,11 @@ class CompanionOffscreenRuntime {
 					status: 'stopped',
 					lastError: null,
 				})
+				this.#emitResult(this.#snapshot, {
+					success: result.success,
+					data: this.#normalizeResultData(result.data),
+					history: result.history,
+				})
 				return
 			}
 
@@ -179,13 +195,25 @@ class CompanionOffscreenRuntime {
 				status: result.success ? 'completed' : 'error',
 				lastError: result.success ? null : this.#normalizeErrorMessage(result.data),
 			})
+			this.#emitResult(this.#snapshot, {
+				success: result.success,
+				data: this.#normalizeResultData(result.data),
+				history: result.history,
+			})
 		} catch (error) {
 			if (this.#agent !== agent || this.#activeTaskId !== taskId) return
+
+			const message = this.#normalizeErrorMessage(error)
 
 			await this.#setSnapshot({
 				taskId,
 				status: this.#stopRequested ? 'stopped' : 'error',
-				lastError: this.#stopRequested ? null : this.#normalizeErrorMessage(error),
+				lastError: this.#stopRequested ? null : message,
+			})
+			this.#emitResult(this.#snapshot, {
+				success: false,
+				data: message,
+				history: [...agent.history],
 			})
 		} finally {
 			if (this.#agentCleanup) {
@@ -223,10 +251,16 @@ class CompanionOffscreenRuntime {
 						: null,
 			})
 		}
+		const handleActivity = (event: Event) => {
+			const activity = (event as CustomEvent<AgentActivity>).detail
+			this.#emitActivity(taskId, activity)
+		}
 
 		agent.addEventListener('statuschange', handleStatusChange)
+		agent.addEventListener('activity', handleActivity)
 		this.#agentCleanup = () => {
 			agent.removeEventListener('statuschange', handleStatusChange)
+			agent.removeEventListener('activity', handleActivity)
 		}
 	}
 
@@ -325,8 +359,15 @@ class CompanionOffscreenRuntime {
 	async #setSnapshot(
 		snapshot: Omit<CompanionTaskSnapshot, 'lastSeenAt'> & {
 			lastSeenAt?: number | null
-		}
+		},
+		emitEvent: boolean = true
 	): Promise<void> {
+		const shouldEmitStatusChanged =
+			emitEvent &&
+			(this.#snapshot.taskId !== (snapshot.taskId ?? null) ||
+				this.#snapshot.status !== snapshot.status ||
+				this.#snapshot.lastError !== (snapshot.lastError ?? null))
+
 		const nextSnapshot: CompanionTaskSnapshot = {
 			taskId: snapshot.taskId ?? null,
 			status: snapshot.status,
@@ -350,12 +391,70 @@ class CompanionOffscreenRuntime {
 				status: nextSnapshot.status,
 			})
 		)
+
+		if (shouldEmitStatusChanged) {
+			this.#emitStatusChanged(nextSnapshot)
+		}
 	}
 
 	#normalizeErrorMessage(value: unknown): string {
 		if (typeof value === 'string' && value.trim().length > 0) return value
 		if (value instanceof Error && value.message.trim().length > 0) return value.message
 		return String(value)
+	}
+
+	#normalizeResultData(value: unknown): string {
+		if (typeof value === 'string' && value.trim().length > 0) return value
+		if (typeof value === 'string') return value
+		return String(value)
+	}
+
+	#emitStatusChanged(snapshot: CompanionTaskSnapshot): void {
+		this.#notifyBackground(
+			createStatusChangedEnvelope(null, {
+				taskId: snapshot.taskId,
+				status: snapshot.status,
+				lastError: snapshot.lastError,
+				lastSeenAt: snapshot.lastSeenAt,
+			})
+		)
+	}
+
+	#emitActivity(taskId: string, activity: AgentActivity): void {
+		this.#notifyBackground(
+			createActivityEnvelope(null, {
+				taskId,
+				activity,
+				lastSeenAt: Date.now(),
+			})
+		)
+	}
+
+	#emitResult(
+		snapshot: CompanionTaskSnapshot,
+		result: {
+			success: boolean
+			data: string
+			history: CompanionResultPayload['history']
+		}
+	): void {
+		this.#notifyBackground(
+			createResultEnvelope(null, {
+				taskId: snapshot.taskId,
+				success: result.success,
+				data: result.data,
+				history: result.history,
+				status: snapshot.status,
+				lastError: snapshot.lastError,
+				lastSeenAt: snapshot.lastSeenAt,
+			})
+		)
+	}
+
+	#notifyBackground(envelope: CompanionEventEnvelope): void {
+		chrome.runtime.sendMessage(createCompanionBackgroundEventMessage(envelope)).catch((error) => {
+			console.warn(`${PREFIX} Failed to notify background.`, error)
+		})
 	}
 
 	#createResponse(

@@ -1,3 +1,5 @@
+import type { AgentActivity, HistoricalEvent } from '@page-agent/core'
+
 import type {
 	CompanionConnectionState,
 	CompanionStorageState,
@@ -101,11 +103,39 @@ export interface CompanionStatusPayload {
 	protocolVersion: string
 }
 
+export interface CompanionStatusChangedPayload {
+	taskId: string | null
+	status: CompanionTaskStatus
+	lastError: string | null
+	lastSeenAt: number | null
+}
+
+export interface CompanionActivityPayload {
+	taskId: string | null
+	activity: AgentActivity
+	lastSeenAt: number | null
+}
+
+export interface CompanionResultPayload {
+	taskId: string | null
+	success: boolean
+	data: string
+	history: HistoricalEvent[]
+	status: CompanionTaskStatus
+	lastError: string | null
+	lastSeenAt: number | null
+}
+
 export interface CompanionEnvelope<TType extends string, TPayload> {
 	type: TType
 	requestId: string | null
 	payload: TPayload
 }
+
+export type CompanionEventEnvelope =
+	| CompanionEnvelope<'status_changed', CompanionStatusChangedPayload>
+	| CompanionEnvelope<'activity', CompanionActivityPayload>
+	| CompanionEnvelope<'result', CompanionResultPayload>
 
 export type ParsedCompanionRequestResult =
 	| {
@@ -390,6 +420,39 @@ export function createStatusEnvelope(
 ): CompanionEnvelope<'status', CompanionStatusPayload> {
 	return {
 		type: 'status',
+		requestId,
+		payload,
+	}
+}
+
+export function createStatusChangedEnvelope(
+	requestId: string | null,
+	payload: CompanionStatusChangedPayload
+): CompanionEnvelope<'status_changed', CompanionStatusChangedPayload> {
+	return {
+		type: 'status_changed',
+		requestId,
+		payload,
+	}
+}
+
+export function createActivityEnvelope(
+	requestId: string | null,
+	payload: CompanionActivityPayload
+): CompanionEnvelope<'activity', CompanionActivityPayload> {
+	return {
+		type: 'activity',
+		requestId,
+		payload,
+	}
+}
+
+export function createResultEnvelope(
+	requestId: string | null,
+	payload: CompanionResultPayload
+): CompanionEnvelope<'result', CompanionResultPayload> {
+	return {
+		type: 'result',
 		requestId,
 		payload,
 	}
