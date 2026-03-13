@@ -1,4 +1,12 @@
 import {
+	COMPANION_PROTOCOL_VERSION,
+	createAckEnvelope,
+	createErrorEnvelope,
+	createStatusEnvelope,
+	createTaskSnapshot,
+	parseCompanionRequest,
+} from '@/companion/protocol/messages'
+import {
 	ensureCompanionStorageDefaults,
 	getCompanionStorageState,
 	setCompanionConnectionState,
@@ -8,12 +16,6 @@ import {
 const PREFIX = '[Companion.background]'
 const RECONNECT_DELAY_MS = 2_000
 const HEARTBEAT_INTERVAL_MS = 15_000
-
-interface CompanionEnvelope {
-	type?: string
-	requestId?: string
-	payload?: unknown
-}
 
 class CompanionBackgroundRuntime {
 	#socket: WebSocket | null = null
@@ -142,17 +144,32 @@ class CompanionBackgroundRuntime {
 	}
 
 	async #handleMessage(event: MessageEvent): Promise<void> {
-		const envelope = this.#parseEnvelope(event.data)
+		const parsed = parseCompanionRequest(event.data)
 
 		await setCompanionConnectionState('connected', {
 			lastError: null,
 			lastSeenAt: Date.now(),
 		})
 
-		if (!envelope) {
-			console.debug(`${PREFIX} Received non-JSON message from helper.`)
+		if (!parsed.ok) {
+			this.#sendEnvelope(
+				createErrorEnvelope(parsed.requestId, {
+					code: parsed.code,
+					message: parsed.message,
+					requestType: parsed.requestType,
+				})
+			)
+			console.warn(
+				`${PREFIX} Invalid helper request.`,
+				JSON.stringify({
+					code: parsed.code,
+					requestType: parsed.requestType ?? null,
+				})
+			)
 			return
 		}
+
+		const { envelope } = parsed
 
 		console.debug(
 			`${PREFIX} Received message from helper.`,
@@ -161,6 +178,24 @@ class CompanionBackgroundRuntime {
 				requestId: envelope.requestId ?? null,
 			})
 		)
+
+		switch (envelope.type) {
+			case 'hello':
+				await this.#handleHello(envelope.requestId)
+				return
+			case 'pair':
+				await this.#handlePair(envelope.requestId, envelope.payload.pairToken)
+				return
+			case 'status':
+				await this.#handleStatus(envelope.requestId, envelope.payload.taskId)
+				return
+			case 'run':
+				await this.#handleUnimplementedAction(envelope.requestId, envelope.type)
+				return
+			case 'stop':
+				await this.#handleUnimplementedAction(envelope.requestId, envelope.type)
+				return
+		}
 	}
 
 	async #handleClose(url: string, event: CloseEvent): Promise<void> {
@@ -249,15 +284,93 @@ class CompanionBackgroundRuntime {
 		}
 	}
 
-	#parseEnvelope(data: unknown): CompanionEnvelope | null {
-		if (typeof data !== 'string') return null
+	async #handleHello(requestId: string | null): Promise<void> {
+		this.#sendEnvelope(
+			createAckEnvelope(requestId, {
+				accepted: true,
+				requestType: 'hello',
+				protocolVersion: COMPANION_PROTOCOL_VERSION,
+				capabilities: ['hello', 'pair', 'status'],
+			})
+		)
+	}
 
-		try {
-			const parsed = JSON.parse(data) as CompanionEnvelope
-			return typeof parsed === 'object' && parsed !== null ? parsed : null
-		} catch {
-			return null
+	async #handlePair(requestId: string | null, pairToken: string): Promise<void> {
+		const state = await getCompanionStorageState()
+
+		if (state.companionPairToken && state.companionPairToken !== pairToken) {
+			this.#sendEnvelope(
+				createErrorEnvelope(requestId, {
+					code: 'pairing_mismatch',
+					message: 'Pair token does not match the current companion binding.',
+					requestType: 'pair',
+				})
+			)
+			return
 		}
+
+		if (!state.companionPairToken) {
+			await updateCompanionStorageState({
+				companionPairToken: pairToken,
+			})
+		}
+
+		this.#sendEnvelope(
+			createAckEnvelope(requestId, {
+				accepted: true,
+				requestType: 'pair',
+				protocolVersion: COMPANION_PROTOCOL_VERSION,
+				paired: true,
+			})
+		)
+	}
+
+	async #handleStatus(requestId: string | null, taskId?: string | null): Promise<void> {
+		const state = await getCompanionStorageState()
+
+		this.#sendEnvelope(
+			createStatusEnvelope(requestId, {
+				task: createTaskSnapshot(state, taskId),
+				connectionState: state.companionConnectionState,
+				paired: Boolean(state.companionPairToken),
+				protocolVersion: COMPANION_PROTOCOL_VERSION,
+			})
+		)
+	}
+
+	async #handleUnimplementedAction(
+		requestId: string | null,
+		requestType: 'run' | 'stop'
+	): Promise<void> {
+		const state = await getCompanionStorageState()
+
+		if (!state.companionPairToken) {
+			this.#sendEnvelope(
+				createErrorEnvelope(requestId, {
+					code: 'pairing_required',
+					message: 'Companion must be paired before task control commands are allowed.',
+					requestType,
+				})
+			)
+			return
+		}
+
+		this.#sendEnvelope(
+			createErrorEnvelope(requestId, {
+				code: 'not_implemented',
+				message: `${requestType} is not implemented yet.`,
+				requestType,
+			})
+		)
+	}
+
+	#sendEnvelope(envelope: unknown): void {
+		if (!this.#socket || this.#socket.readyState !== WebSocket.OPEN) {
+			console.warn(`${PREFIX} Unable to send message because helper socket is not open.`)
+			return
+		}
+
+		this.#socket.send(JSON.stringify(envelope))
 	}
 }
 

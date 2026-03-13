@@ -32,6 +32,13 @@ export interface CompanionStorageState {
 	companionLastSeenAt: number | null
 }
 
+export interface CompanionTaskSnapshot {
+	taskId: string | null
+	status: CompanionTaskStatus
+	lastError: string | null
+	lastSeenAt: number | null
+}
+
 export const DEFAULT_COMPANION_STORAGE_STATE: CompanionStorageState = {
 	companionEnabled: false,
 	companionServerUrl: DEFAULT_COMPANION_SERVER_URL,
