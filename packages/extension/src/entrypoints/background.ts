@@ -1,5 +1,6 @@
 import { handlePageControlMessage } from '@/agent/RemotePageController.background'
 import { handleTabControlMessage, setupTabChangeEvents } from '@/agent/TabsController.background'
+import { initializeCompanionBackgroundRuntime } from '@/companion/runtime/background-runtime'
 
 export default defineBackground(() => {
 	console.log('[Background] Service Worker started')
@@ -33,4 +34,6 @@ export default defineBackground(() => {
 	// setup
 
 	chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {})
+
+	void initializeCompanionBackgroundRuntime()
 })
