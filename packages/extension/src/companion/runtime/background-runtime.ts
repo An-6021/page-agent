@@ -23,6 +23,7 @@ import {
 	setCompanionConnectionState,
 	updateCompanionStorageState,
 } from '@/companion/storage/companion-store'
+import type { CompanionTaskStatus } from '@/types/companion'
 
 const PREFIX = '[Companion.background]'
 const RECONNECT_DELAY_MS = 2_000
@@ -399,6 +400,18 @@ class CompanionBackgroundRuntime {
 
 		try {
 			await ensureCompanionOffscreenDocument()
+			const currentTask = await getCompanionOffscreenStatus()
+
+			if (currentTask.ok && currentTask.task && isCompanionTaskActive(currentTask.task.status)) {
+				this.#sendOffscreenError(
+					requestId,
+					'run',
+					'task_conflict',
+					`Task ${currentTask.task.taskId ?? '(unknown)'} is already running in the offscreen executor.`
+				)
+				return
+			}
+
 			const response = await runCompanionOffscreen(payload)
 
 			if (!response.ok || !response.task) {
@@ -523,4 +536,8 @@ export async function initializeCompanionBackgroundRuntime(): Promise<void> {
 		})
 		console.error(`${PREFIX} Failed to initialize runtime.`, error)
 	}
+}
+
+function isCompanionTaskActive(status: CompanionTaskStatus): boolean {
+	return status === 'queued' || status === 'running'
 }
