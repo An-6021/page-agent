@@ -25,6 +25,9 @@
     },
     "scripts": {
         "start": "npm run dev --workspace=@page-agent/website",
+        "companion:doctor": "node scripts/companion-dev-helper.js doctor --json",
+        "companion:helper": "node scripts/companion-dev-helper.js",
+        "companion:serve": "node scripts/companion-dev-helper.js serve",
         "dev:ext": "npm run dev -w @page-agent/ext",
         "dev:demo": "npm run dev:demo --workspace=page-agent",
         "build": "npm run build:libs && npm run build:website",
@@ -62,8 +65,9 @@
         "typescript-eslint": "^8.57.0",
         "unplugin-dts": "^1.0.0-beta.6",
         "vite": "^7.3.1",
+        "vite-bundle-analyzer": "^1.3.6",
         "vite-plugin-css-injected-by-js": "^4.0.1",
-        "vite-bundle-analyzer": "^1.3.6"
+        "ws": "^8.19.0"
     },
     "overrides": {
         "typescript": "^5.9.3"
