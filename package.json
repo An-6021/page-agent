@@ -20,14 +20,17 @@
         "url": "https://github.com/alibaba/page-agent.git"
     },
     "homepage": "https://alibaba.github.io/page-agent/",
+    "bin": {
+        "page-agent-companion": "./scripts/page-agent-companion.js"
+    },
     "engines": {
         "node": "^20.19.0 || ^22.13.0 || >=24"
     },
     "scripts": {
         "start": "npm run dev --workspace=@page-agent/website",
-        "companion:doctor": "node scripts/companion-dev-helper.js doctor --json",
-        "companion:helper": "node scripts/companion-dev-helper.js",
-        "companion:serve": "node scripts/companion-dev-helper.js serve",
+        "companion:doctor": "node scripts/page-agent-companion.js doctor --json",
+        "companion:helper": "node scripts/page-agent-companion.js serve",
+        "companion:serve": "node scripts/page-agent-companion.js serve",
         "dev:ext": "npm run dev -w @page-agent/ext",
         "dev:demo": "npm run dev:demo --workspace=page-agent",
         "build": "npm run build:libs && npm run build:website",
