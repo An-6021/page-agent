@@ -66,14 +66,24 @@ function omitUndefinedFields<T extends Record<string, unknown>>(value: T): Parti
 }
 
 export async function getCompanionStorageState(): Promise<CompanionStorageState> {
-	const result = (await chrome.storage.local.get(
-		COMPANION_STORAGE_KEYS as unknown as string[]
-	)) as Partial<Record<keyof CompanionStorageState, unknown>>
+	const storage = chrome.storage?.local
+	if (!storage) {
+		return DEFAULT_COMPANION_STORAGE_STATE
+	}
+
+	const result = (await storage.get(COMPANION_STORAGE_KEYS as unknown as string[])) as Partial<
+		Record<keyof CompanionStorageState, unknown>
+	>
 
 	return normalizeCompanionStorageState(result)
 }
 
 export async function ensureCompanionStorageDefaults(): Promise<CompanionStorageState> {
+	const storage = chrome.storage?.local
+	if (!storage) {
+		return DEFAULT_COMPANION_STORAGE_STATE
+	}
+
 	const state = await getCompanionStorageState()
 	const patch: Partial<CompanionStorageState> = {}
 
@@ -83,14 +93,14 @@ export async function ensureCompanionStorageDefaults(): Promise<CompanionStorage
 
 		if (currentValue !== defaultValue) continue
 
-		const result = await chrome.storage.local.get(key)
+		const result = await storage.get(key)
 		if (result[key] !== undefined) continue
 
 		patch[key] = defaultValue
 	}
 
 	if (Object.keys(patch).length > 0) {
-		await chrome.storage.local.set(patch)
+		await storage.set(patch)
 	}
 
 	return state
@@ -99,13 +109,18 @@ export async function ensureCompanionStorageDefaults(): Promise<CompanionStorage
 export async function updateCompanionStorageState(
 	patch: Partial<CompanionStorageState>
 ): Promise<CompanionStorageState> {
+	const storage = chrome.storage?.local
+	if (!storage) {
+		return DEFAULT_COMPANION_STORAGE_STATE
+	}
+
 	const normalizedPatch = omitUndefinedFields(patch)
 
 	if (Object.keys(normalizedPatch).length === 0) {
 		return getCompanionStorageState()
 	}
 
-	await chrome.storage.local.set(normalizedPatch)
+	await storage.set(normalizedPatch)
 	return getCompanionStorageState()
 }
 

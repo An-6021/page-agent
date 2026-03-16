@@ -40,7 +40,7 @@ export interface CompanionTaskSnapshot {
 }
 
 export const DEFAULT_COMPANION_STORAGE_STATE: CompanionStorageState = {
-	companionEnabled: false,
+	companionEnabled: true,
 	companionServerUrl: DEFAULT_COMPANION_SERVER_URL,
 	companionPairToken: null,
 	companionConnectionState: 'disabled',

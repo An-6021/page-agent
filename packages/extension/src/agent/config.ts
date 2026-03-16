@@ -18,7 +18,15 @@ export interface ExtConfig extends LLMConfig, AdvancedConfig {
 const STORAGE_KEYS = ['llmConfig', 'language', 'advancedConfig'] as const
 
 export async function loadStoredAgentConfig(): Promise<ExtConfig> {
-	const result = await chrome.storage.local.get([...STORAGE_KEYS])
+	const storage = chrome.storage?.local
+	if (!storage) {
+		return {
+			...DEMO_CONFIG,
+			language: undefined,
+		}
+	}
+
+	const result = await storage.get([...STORAGE_KEYS])
 
 	let llmConfig = (result.llmConfig as LLMConfig | undefined) ?? DEMO_CONFIG
 	const language = (result.language as SupportedLanguage | undefined) || undefined
@@ -27,9 +35,9 @@ export async function loadStoredAgentConfig(): Promise<ExtConfig> {
 	const migrated = migrateLegacyEndpoint(llmConfig)
 	if (migrated !== llmConfig) {
 		llmConfig = migrated
-		await chrome.storage.local.set({ llmConfig: migrated })
+		await storage.set({ llmConfig: migrated })
 	} else if (!result.llmConfig) {
-		await chrome.storage.local.set({ llmConfig: DEMO_CONFIG })
+		await storage.set({ llmConfig: DEMO_CONFIG })
 	}
 
 	return {

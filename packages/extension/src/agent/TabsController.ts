@@ -234,7 +234,9 @@ export class TabsController extends EventTarget {
 		debug('updateCurrentTabId', tabId)
 
 		this.currentTabId = tabId
-		await chrome.storage.local.set({ currentTabId: tabId })
+		const storage = chrome.storage?.local
+		if (!storage) return
+		await storage.set({ currentTabId: tabId })
 	}
 
 	async getTabInfo(tabId: number): Promise<{ title: string; url: string }> {

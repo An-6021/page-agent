@@ -5,6 +5,12 @@ import { TabsController } from './TabsController'
 import SYSTEM_PROMPT from './system_prompt.md?raw'
 import { createTabTools } from './tabTools'
 
+async function setLocalState(patch: Record<string, unknown>): Promise<void> {
+	const storage = chrome.storage?.local
+	if (!storage) return
+	await storage.set(patch)
+}
+
 /** Detect user language from browser settings */
 function detectLanguage(): 'en-US' | 'zh-CN' {
 	const lang = navigator.language || navigator.languages?.[0] || 'en-US'
@@ -53,12 +59,12 @@ export class MultiPageAgent extends PageAgentCore {
 				await tabsController.init(agent.task, includeInitialTab)
 
 				heartBeatInterval = window.setInterval(() => {
-					chrome.storage.local.set({
+					void setLocalState({
 						agentHeartbeat: Date.now(),
 					})
 				}, 1_000)
 
-				await chrome.storage.local.set({
+				await setLocalState({
 					isAgentRunning: true,
 				})
 			},
@@ -69,7 +75,7 @@ export class MultiPageAgent extends PageAgentCore {
 					heartBeatInterval = null
 				}
 
-				await chrome.storage.local.set({
+				await setLocalState({
 					isAgentRunning: false,
 				})
 			},
@@ -85,7 +91,7 @@ export class MultiPageAgent extends PageAgentCore {
 					heartBeatInterval = null
 				}
 
-				chrome.storage.local.set({
+				void setLocalState({
 					isAgentRunning: false,
 				})
 

@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 import chalk from 'chalk'
+import { spawnSync } from 'child_process'
 import { randomUUID } from 'crypto'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { createServer } from 'http'
 import { homedir } from 'os'
 import { dirname, join } from 'path'
 import process from 'process'
+import { fileURLToPath } from 'url'
 import { WebSocket, WebSocketServer } from 'ws'
 
 const CLI_NAME = 'page-agent-companion'
@@ -15,6 +17,7 @@ const DEFAULT_CONTROL_URL = 'http://127.0.0.1:17889'
 const DEFAULT_TIMEOUT_MS = 15_000
 const DEFAULT_STATE_FILE = join(homedir(), '.page-agent-companion', 'state.json')
 const DEFAULT_INSTANCE_ID = 'browser-default'
+const DEFAULT_SERVICE_LABEL = 'io.pageagent.companion'
 const MAX_RECENT_ERRORS = 20
 
 const command = process.argv[2] ?? 'help'
@@ -25,6 +28,17 @@ const controlUrl = parsedArgs.flags['control-url'] ?? deriveControlUrl(helperUrl
 const stateFile = parsedArgs.flags['state-file'] ?? DEFAULT_STATE_FILE
 const timeoutMs = Number(parsedArgs.flags.timeout ?? DEFAULT_TIMEOUT_MS)
 const jsonOutput = parsedArgs.flags.json === true
+const serviceLabel = resolveServiceLabel(parsedArgs.flags['service-label'])
+const servicePlistPath =
+	parsedArgs.flags['service-plist'] ??
+	join(homedir(), 'Library', 'LaunchAgents', `${serviceLabel}.plist`)
+const serviceConfig = createServiceConfig({
+	serviceLabel,
+	servicePlistPath,
+	helperUrl,
+	controlUrl,
+	stateFile,
+})
 
 async function runServeCommand({ helperUrl, controlUrl, stateFile }) {
 	const helper = new CompanionDevHelper({
@@ -43,6 +57,18 @@ async function runClientCommand(commandName, options) {
 		timeoutMs: options.timeoutMs,
 		body: options.body,
 	})
+
+	if (options.jsonOutput) {
+		console.log(JSON.stringify(result, null, 2))
+	} else {
+		printCommandResult(result)
+	}
+
+	process.exitCode = getExitCode(result)
+}
+
+async function runServiceCommand(resultPromise, options) {
+	const result = await resultPromise
 
 	if (options.jsonOutput) {
 		console.log(JSON.stringify(result, null, 2))
@@ -739,6 +765,362 @@ function deriveControlUrl(helperUrl) {
 	return `http://${url.hostname}:${port + 1}`
 }
 
+function resolveServiceLabel(value) {
+	if (typeof value === 'string' && value.trim().length > 0) {
+		return value.trim()
+	}
+
+	return DEFAULT_SERVICE_LABEL
+}
+
+function createServiceConfig({ serviceLabel, servicePlistPath, helperUrl, controlUrl, stateFile }) {
+	const scriptPath = fileURLToPath(import.meta.url)
+	const uid = typeof process.getuid === 'function' ? process.getuid() : null
+	const stateDir = dirname(stateFile)
+	const logDir = join(stateDir, 'logs')
+
+	return {
+		label: serviceLabel,
+		plistPath: servicePlistPath,
+		nodePath: process.execPath,
+		scriptPath,
+		workingDirectory: dirname(dirname(scriptPath)),
+		domainTarget: uid === null ? null : `gui/${uid}`,
+		serviceTarget: uid === null ? null : `gui/${uid}/${serviceLabel}`,
+		logDir,
+		stdoutPath: join(logDir, 'helper.log'),
+		stderrPath: join(logDir, 'helper.error.log'),
+		helperUrl,
+		controlUrl,
+		stateFile,
+	}
+}
+
+function escapeXml(value) {
+	return String(value)
+		.replaceAll('&', '&amp;')
+		.replaceAll('<', '&lt;')
+		.replaceAll('>', '&gt;')
+		.replaceAll('"', '&quot;')
+		.replaceAll("'", '&apos;')
+}
+
+function buildLaunchAgentPlist(service) {
+	const programArguments = [
+		service.nodePath,
+		service.scriptPath,
+		'serve',
+		'--helper-url',
+		service.helperUrl,
+		'--control-url',
+		service.controlUrl,
+		'--state-file',
+		service.stateFile,
+	]
+
+	const argumentLines = programArguments
+		.map((value) => `\t\t<string>${escapeXml(value)}</string>`)
+		.join('\n')
+
+	return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+\t<key>Label</key>
+\t<string>${escapeXml(service.label)}</string>
+\t<key>ProgramArguments</key>
+\t<array>
+${argumentLines}
+\t</array>
+\t<key>WorkingDirectory</key>
+\t<string>${escapeXml(service.workingDirectory)}</string>
+\t<key>RunAtLoad</key>
+\t<true/>
+\t<key>KeepAlive</key>
+\t<true/>
+\t<key>ProcessType</key>
+\t<string>Background</string>
+\t<key>StandardOutPath</key>
+\t<string>${escapeXml(service.stdoutPath)}</string>
+\t<key>StandardErrorPath</key>
+\t<string>${escapeXml(service.stderrPath)}</string>
+</dict>
+</plist>
+`
+}
+
+function runLaunchctl(args) {
+	const result = spawnSync('launchctl', args, {
+		encoding: 'utf-8',
+	})
+
+	return {
+		ok: !result.error && result.status === 0,
+		status: result.status ?? 1,
+		stdout: result.stdout ?? '',
+		stderr: result.stderr ?? '',
+		error: result.error instanceof Error ? result.error.message : null,
+	}
+}
+
+function isLaunchctlMissing(result) {
+	return typeof result.error === 'string' && result.error.length > 0
+}
+
+function isLaunchctlNotLoaded(result) {
+	const text = `${result.stdout}\n${result.stderr}\n${result.error ?? ''}`
+	return /could not find service|no such process|not loaded|service is disabled/i.test(text)
+}
+
+function isLaunchctlAlreadyLoaded(result) {
+	const text = `${result.stdout}\n${result.stderr}\n${result.error ?? ''}`
+	return /already loaded|service already loaded|in progress/i.test(text)
+}
+
+function formatLaunchctlFailure(action, result) {
+	const detail = [result.stderr, result.stdout, result.error].find(
+		(value) => typeof value === 'string' && value.trim().length > 0
+	)
+
+	return detail
+		? `launchctl ${action} failed: ${detail.trim()}`
+		: `launchctl ${action} failed with exit code ${result.status}.`
+}
+
+function parseLaunchctlPrint(stdout) {
+	const pidMatch = stdout.match(/pid = (\d+)/)
+	const stateMatch = stdout.match(/state = ([^\n]+)/)
+	const lastExitCodeMatch = stdout.match(/last exit code = (\d+)/)
+
+	return {
+		pid: pidMatch ? Number(pidMatch[1]) : null,
+		state: stateMatch ? stateMatch[1].trim() : null,
+		lastExitCode: lastExitCodeMatch ? Number(lastExitCodeMatch[1]) : null,
+	}
+}
+
+function ensureServiceSupported(commandName, service) {
+	if (process.platform !== 'darwin') {
+		return createFailureResult(
+			commandName,
+			'unsupported_platform',
+			'Companion service management is currently supported on macOS only.'
+		)
+	}
+
+	if (!service.domainTarget || !service.serviceTarget) {
+		return createFailureResult(
+			commandName,
+			'unsupported_platform',
+			'Unable to determine the current macOS user session for launchd.'
+		)
+	}
+
+	return null
+}
+
+function writeServicePlist(service) {
+	mkdirSync(dirname(service.plistPath), { recursive: true })
+	mkdirSync(dirname(service.stateFile), { recursive: true })
+	mkdirSync(service.logDir, { recursive: true })
+	writeFileSync(service.plistPath, buildLaunchAgentPlist(service))
+}
+
+async function probeHelperReachability(controlUrl, timeoutMs = 1_500) {
+	const result = await sendControlCommand({
+		commandName: 'doctor',
+		controlUrl,
+		timeoutMs,
+		body: {},
+	})
+
+	return result.ok
+}
+
+function sleep(ms) {
+	return new Promise((resolve) => {
+		setTimeout(resolve, ms)
+	})
+}
+
+async function waitForHelperReachability(controlUrl, attempts = 10, delayMs = 500) {
+	for (let attempt = 0; attempt < attempts; attempt += 1) {
+		if (await probeHelperReachability(controlUrl)) {
+			return true
+		}
+
+		if (attempt < attempts - 1) {
+			await sleep(delayMs)
+		}
+	}
+
+	return false
+}
+
+async function inspectService(service) {
+	const installed = existsSync(service.plistPath)
+	const base = {
+		label: service.label,
+		plistPath: service.plistPath,
+		helperUrl: service.helperUrl,
+		controlUrl: service.controlUrl,
+		stateFile: service.stateFile,
+		stdoutPath: service.stdoutPath,
+		stderrPath: service.stderrPath,
+		installed,
+		loaded: false,
+		reachable: false,
+		pid: null,
+		state: null,
+		lastExitCode: null,
+	}
+
+	if (!installed) {
+		return createSuccessResult('service-status', base)
+	}
+
+	const printResult = runLaunchctl(['print', service.serviceTarget])
+	if (printResult.ok) {
+		const parsed = parseLaunchctlPrint(printResult.stdout)
+		base.loaded = true
+		base.pid = parsed.pid
+		base.state = parsed.state
+		base.lastExitCode = parsed.lastExitCode
+	}
+
+	base.reachable = await probeHelperReachability(service.controlUrl)
+	return createSuccessResult('service-status', base)
+}
+
+async function runInstallCommand(service) {
+	const unsupported = ensureServiceSupported('install', service)
+	if (unsupported) return unsupported
+
+	writeServicePlist(service)
+
+	runLaunchctl(['bootout', service.domainTarget, service.plistPath])
+
+	const bootstrapResult = runLaunchctl(['bootstrap', service.domainTarget, service.plistPath])
+	if (!bootstrapResult.ok && !isLaunchctlAlreadyLoaded(bootstrapResult)) {
+		return createFailureResult(
+			'install',
+			isLaunchctlMissing(bootstrapResult) ? 'unsupported_platform' : 'service_error',
+			formatLaunchctlFailure('bootstrap', bootstrapResult)
+		)
+	}
+
+	const kickstartResult = runLaunchctl(['kickstart', '-k', service.serviceTarget])
+	if (!kickstartResult.ok) {
+		return createFailureResult(
+			'install',
+			'service_error',
+			formatLaunchctlFailure('kickstart', kickstartResult)
+		)
+	}
+
+	await waitForHelperReachability(service.controlUrl)
+	const statusResult = await inspectService(service)
+	return createSuccessResult('install', {
+		...statusResult.data,
+	})
+}
+
+async function runServiceStartCommand(service) {
+	const unsupported = ensureServiceSupported('service-start', service)
+	if (unsupported) return unsupported
+
+	if (!existsSync(service.plistPath)) {
+		return createFailureResult(
+			'service-start',
+			'service_not_installed',
+			'Companion service is not installed yet. Run `page-agent-companion install` first.'
+		)
+	}
+
+	const bootstrapResult = runLaunchctl(['bootstrap', service.domainTarget, service.plistPath])
+	if (!bootstrapResult.ok && !isLaunchctlAlreadyLoaded(bootstrapResult)) {
+		return createFailureResult(
+			'service-start',
+			isLaunchctlMissing(bootstrapResult) ? 'unsupported_platform' : 'service_error',
+			formatLaunchctlFailure('bootstrap', bootstrapResult)
+		)
+	}
+
+	const kickstartResult = runLaunchctl(['kickstart', '-k', service.serviceTarget])
+	if (!kickstartResult.ok) {
+		return createFailureResult(
+			'service-start',
+			'service_error',
+			formatLaunchctlFailure('kickstart', kickstartResult)
+		)
+	}
+
+	await waitForHelperReachability(service.controlUrl)
+	const statusResult = await inspectService(service)
+	return createSuccessResult('service-start', {
+		...statusResult.data,
+	})
+}
+
+async function runServiceStopCommand(service) {
+	const unsupported = ensureServiceSupported('service-stop', service)
+	if (unsupported) return unsupported
+
+	if (!existsSync(service.plistPath)) {
+		return createFailureResult(
+			'service-stop',
+			'service_not_installed',
+			'Companion service is not installed yet.'
+		)
+	}
+
+	const bootoutResult = runLaunchctl(['bootout', service.domainTarget, service.plistPath])
+	if (!bootoutResult.ok && !isLaunchctlNotLoaded(bootoutResult)) {
+		return createFailureResult(
+			'service-stop',
+			'service_error',
+			formatLaunchctlFailure('bootout', bootoutResult)
+		)
+	}
+
+	const statusResult = await inspectService(service)
+	return createSuccessResult('service-stop', {
+		...statusResult.data,
+	})
+}
+
+async function runUninstallCommand(service) {
+	const unsupported = ensureServiceSupported('uninstall', service)
+	if (unsupported) return unsupported
+
+	if (!existsSync(service.plistPath)) {
+		return createFailureResult(
+			'uninstall',
+			'service_not_installed',
+			'Companion service is not installed yet.'
+		)
+	}
+
+	const bootoutResult = runLaunchctl(['bootout', service.domainTarget, service.plistPath])
+	if (!bootoutResult.ok && !isLaunchctlNotLoaded(bootoutResult)) {
+		return createFailureResult(
+			'uninstall',
+			'service_error',
+			formatLaunchctlFailure('bootout', bootoutResult)
+		)
+	}
+
+	rmSync(service.plistPath, { force: true })
+
+	return createSuccessResult('uninstall', {
+		label: service.label,
+		plistPath: service.plistPath,
+		installed: false,
+		loaded: false,
+		reachable: false,
+	})
+}
+
 function isPlainObject(value) {
 	return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -792,6 +1174,11 @@ function getExitCode(result) {
 			return 6
 		case 'timeout':
 			return 7
+		case 'service_not_installed':
+			return 8
+		case 'unsupported_platform':
+		case 'service_error':
+			return 9
 		default:
 			return 1
 	}
@@ -840,6 +1227,11 @@ function printHelp() {
 
 Commands:
   serve                         Start the local companion helper service
+  install                       Install and start the macOS launchd companion service
+  service-status                Inspect the installed macOS companion service
+  service-start                 Start the installed macOS companion service
+  service-stop                  Stop the installed macOS companion service
+  uninstall                     Uninstall the macOS companion service
   doctor [--json]               Inspect helper and extension connectivity
   pair [--token <value>]        Pair the helper with the connected extension
   run --task-file <path>        Send a run request from a JSON task file
@@ -850,6 +1242,8 @@ Global options:
   --helper-url <ws-url>         WebSocket bind URL for the helper service
   --control-url <http-url>      HTTP control URL used by CLI commands
   --state-file <path>           Override the helper state file path
+  --service-label <label>       Override the macOS launchd service label
+  --service-plist <path>        Override the macOS launchd plist path
   --timeout <ms>                Control request timeout in milliseconds
   --json                        Print JSON output for command responses
 `)
@@ -884,6 +1278,23 @@ function printSuccessSummary(result) {
 		case 'pair':
 			console.log(`paired: ${String(result.data.paired)}`)
 			console.log(`instanceId: ${result.data.instanceId ?? 'unknown'}`)
+			return
+		case 'install':
+		case 'service-status':
+		case 'service-start':
+		case 'service-stop':
+		case 'uninstall':
+			console.log(`installed: ${String(result.data.installed)}`)
+			console.log(`loaded: ${String(result.data.loaded)}`)
+			console.log(`reachable: ${String(result.data.reachable)}`)
+			console.log(`label: ${result.data.label ?? 'unknown'}`)
+			console.log(`plistPath: ${result.data.plistPath ?? 'unknown'}`)
+			if (result.data.state) {
+				console.log(`state: ${result.data.state}`)
+			}
+			if (result.data.pid !== null && result.data.pid !== undefined) {
+				console.log(`pid: ${result.data.pid}`)
+			}
 			return
 		default:
 			console.log(chalk.green(`✓ ${result.command}`))
@@ -963,6 +1374,31 @@ async function main() {
 					body: {
 						taskId: parsedArgs.flags['task-id'] ?? null,
 					},
+				})
+				return
+			case 'install':
+				await runServiceCommand(runInstallCommand(serviceConfig), {
+					jsonOutput,
+				})
+				return
+			case 'service-status':
+				await runServiceCommand(inspectService(serviceConfig), {
+					jsonOutput,
+				})
+				return
+			case 'service-start':
+				await runServiceCommand(runServiceStartCommand(serviceConfig), {
+					jsonOutput,
+				})
+				return
+			case 'service-stop':
+				await runServiceCommand(runServiceStopCommand(serviceConfig), {
+					jsonOutput,
+				})
+				return
+			case 'uninstall':
+				await runServiceCommand(runUninstallCommand(serviceConfig), {
+					jsonOutput,
 				})
 				return
 			case 'help':

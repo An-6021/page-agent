@@ -21,6 +21,13 @@ chrome.runtime.onMessage.addListener(
 			.handleMessage(message)
 			.then(sendResponse)
 			.catch((error) => {
+				const errorText =
+					error instanceof Error
+						? error.stack
+							? `${error.message}\n${error.stack}`
+							: error.message
+						: String(error)
+
 				sendResponse({
 					ok: false,
 					target: 'companion-offscreen',
@@ -28,7 +35,7 @@ chrome.runtime.onMessage.addListener(
 					ready: true,
 					timestamp: Date.now(),
 					code: 'execution_error',
-					error: error instanceof Error ? error.message : String(error),
+					error: errorText,
 				})
 			})
 
